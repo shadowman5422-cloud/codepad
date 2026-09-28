@@ -1,28 +1,33 @@
-// Minimal service worker for CodePad — enables "Install" as a real app
-// (Chrome requires a registered service worker with a fetch handler for
-// full PWA installability, on top of the web app manifest.)
+// CodePad service worker — network first, so a fresh upload to GitHub
+// shows up on the very next refresh. The cache is only a fallback for
+// when the phone is offline.
 
-var CACHE_NAME = "codepad-cache-v1";
+var CACHE_NAME = "codepad-cache-v2";
 
 self.addEventListener("install", function(event){
   self.skipWaiting();
 });
 
 self.addEventListener("activate", function(event){
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys().then(function(keys){
+      return Promise.all(keys.filter(function(k){ return k !== CACHE_NAME; })
+        .map(function(k){ return caches.delete(k); }));
+    }).then(function(){ return self.clients.claim(); })
+  );
 });
 
 self.addEventListener("fetch", function(event){
+  if(event.request.method !== "GET") return;
   event.respondWith(
-    caches.match(event.request).then(function(cached){
-      var fetchPromise = fetch(event.request).then(function(networkResponse){
-        if(networkResponse && networkResponse.ok){
-          var copy = networkResponse.clone();
-          caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, copy); });
-        }
-        return networkResponse;
-      }).catch(function(){ return cached; });
-      return cached || fetchPromise;
+    fetch(event.request).then(function(networkResponse){
+      if(networkResponse && networkResponse.ok){
+        var copy = networkResponse.clone();
+        caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, copy); });
+      }
+      return networkResponse;
+    }).catch(function(){
+      return caches.match(event.request);
     })
   );
 });
