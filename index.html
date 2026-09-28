@@ -413,11 +413,6 @@ body{
 .kb-key:last-child{border-right:none;}
 .kb-key:active{background:var(--bg-elev-2);color:var(--accent);}
 
-@media (min-width:760px){
-  .sidebar{position:relative;transform:none;width:250px;max-width:250px;}
-  .sidebar-backdrop{display:none;}
-  .menu-toggle{display:none;}
-}
 
 /* ---------- Fit-to-screen fixes ---------- */
 html,body{overflow:hidden;max-width:100%;overscroll-behavior:none;}
@@ -719,10 +714,18 @@ var curFileName = $("curFileName");
 var runBtn = $("runBtn"), downloadBtn = $("downloadBtn"), saveBtn = $("saveBtn");
 var newFileBtn = $("newFileBtn"), newFileModal = $("newFileModal"), newFileInput = $("newFileInput");
 var toastEl = $("toast");
-var isDesktop = window.matchMedia("(min-width:760px)").matches;
+var isDesktop = false; // sidebar is always a slide-over panel opened with the ☰ button
 
 /* ============ Sidebar open/close ============ */
-function openSidebar(){ sidebar.classList.add("open"); sidebarBackdrop.classList.add("show"); }
+function openSidebar(){
+  // start just below the top bar so the ☰ button stays tappable to close it again
+  var top = document.querySelector(".topbar").getBoundingClientRect().bottom;
+  sidebar.style.top = top + "px";
+  sidebarBackdrop.style.top = top + "px";
+  sidebar.style.paddingTop = "0px";
+  sidebar.classList.add("open");
+  sidebarBackdrop.classList.add("show");
+}
 function closeSidebar(){ sidebar.classList.remove("open"); sidebarBackdrop.classList.remove("show"); }
 menuToggle.addEventListener("click", function(){
   sidebar.classList.contains("open") ? closeSidebar() : openSidebar();
@@ -1506,7 +1509,7 @@ $("previewClose").addEventListener("click", function(){ previewPanel.classList.r
 /* ============ Init ============ */
 persist();
 renderAll();
-if(isDesktop) sidebarClose.style.display = "none";
+
 if("serviceWorker" in navigator){
   window.addEventListener("load", function(){
     navigator.serviceWorker.register("./sw.js").catch(function(){ /* no sw.js here (e.g. claude.ai preview) — fine, just no offline/install support */ });
