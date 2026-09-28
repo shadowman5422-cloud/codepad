@@ -418,6 +418,17 @@ body{
   .sidebar-backdrop{display:none;}
   .menu-toggle{display:none;}
 }
+
+/* ---------- Fit-to-screen fixes ---------- */
+html,body{overflow:hidden;max-width:100%;overscroll-behavior:none;}
+body{position:fixed;left:0;top:0;width:100%;height:100%;}
+.brand{min-width:0;flex:1 1 auto;overflow:hidden;}
+.brand #curFileName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.topbar .spacer{display:none;}
+.topbar .icon-btn{flex:0 0 auto;}
+.kb-toolbar{left:0;right:0;}
+.kb-key{min-width:0;padding:0;}
+.modal input{font-size:16px;}
 </style>
 </head>
 <body>
@@ -1119,22 +1130,24 @@ function updateKbToolbarPosition(){
   var vv = window.visualViewport;
   var offset = window.innerHeight - vv.height - vv.offsetTop;
   kbToolbar.style.bottom = Math.max(0, offset) + "px";
+  kbToolbar.style.left = vv.offsetLeft + "px";
+  kbToolbar.style.right = "auto";
+  kbToolbar.style.width = vv.width + "px";
 }
 
-// Shrink the whole app to the visible area (above the on-screen keyboard)
-// and reserve room for the toolbar, so the editor's bottom edge sits above
-// the keyboard and every line can be scrolled into view.
+// Pin the whole app to the visible area (handles keyboard, zoom and any
+// page panning) and reserve room for the toolbar, so nothing gets cut off.
 function layoutForKeyboard(){
   var vv = window.visualViewport;
   var kbOpen = kbToolbar.classList.contains("show");
-  if(vv && kbOpen){
+  if(vv){
+    document.body.style.left = vv.offsetLeft + "px";
+    document.body.style.top = vv.offsetTop + "px";
+    document.body.style.width = vv.width + "px";
     document.body.style.height = vv.height + "px";
-    document.body.style.paddingBottom = kbToolbar.offsetHeight + "px";
-    if(vv.offsetTop > 0) window.scrollTo(0, 0);
-  } else {
-    document.body.style.height = "";
-    document.body.style.paddingBottom = "";
+    document.body.style.paddingBottom = kbOpen ? kbToolbar.offsetHeight + "px" : "";
   }
+  if(window.scrollX || window.scrollY) window.scrollTo(0, 0);
   updateKbToolbarPosition();
   if(kbOpen) ensureCaretVisible();
 }
@@ -1151,6 +1164,9 @@ function ensureCaretVisible(){
   else if(bottom > ta.scrollTop + ta.clientHeight) ta.scrollTop = bottom - ta.clientHeight + pad;
 }
 
+window.addEventListener("scroll", function(){ if(window.scrollX || window.scrollY) window.scrollTo(0,0); });
+window.addEventListener("resize", layoutForKeyboard);
+setTimeout(layoutForKeyboard, 0);
 if(window.visualViewport){
   window.visualViewport.addEventListener("resize", layoutForKeyboard);
   window.visualViewport.addEventListener("scroll", layoutForKeyboard);
