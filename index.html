@@ -3,6 +3,31 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<script>
+// Some mobile browsers (e.g. after "Request desktop site" was toggled on
+// once for this page, or a few odd WebViews used for "Add to Home screen"
+// shortcuts) ignore width=device-width and lay the page out at a wide
+// virtual viewport (~980px), then shrink the whole thing to fit the real
+// screen — everything on-screen looks tiny even though nothing in our CSS
+// changed. Detect that as early as possible and force the viewport back to
+// the real screen width so it can't happen.
+(function(){
+  try{
+    var vp = document.querySelector('meta[name="viewport"]');
+    if(!vp) return;
+    function fix(){
+      var cw = document.documentElement.clientWidth;
+      var real = window.screen && window.screen.width ? window.screen.width : 0;
+      if(cw > 560){
+        vp.setAttribute("content", "width=" + (real > 200 ? real : 420) + ", initial-scale=1, maximum-scale=1, viewport-fit=cover");
+      }
+    }
+    fix();
+    document.addEventListener("DOMContentLoaded", fix);
+    window.addEventListener("load", fix);
+  }catch(e){}
+})();
+</script>
 <title>CodePad — অন-ডিভাইস কোড এডিটর</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon.svg" type="image/svg+xml">
@@ -31,6 +56,8 @@
   box-sizing:border-box;
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
+  -webkit-text-size-adjust:100%;
+  text-size-adjust:100%;
 }
 :root[data-theme="light"]{
   --bg:#f6f8fa;
@@ -51,6 +78,7 @@
 }
 *{box-sizing:border-box;}
 html,body{height:100%;margin:0;}
+html{width:100%;max-width:100vw;}
 body{
   background:var(--bg);
   color:var(--text);
@@ -59,6 +87,9 @@ body{
   flex-direction:column;
   overflow:hidden;
   -webkit-tap-highlight-color:transparent;
+  width:100%;
+  height:100vh;
+  height:100dvh;
 }
 
 /* ---------- Top bar ---------- */
@@ -209,8 +240,17 @@ body{
   font-size:10px;color:var(--text-dim);transition:transform .15s ease;
 }
 .file-row .file-chevron.open{transform:rotate(90deg);}
+.file-row .add-child-btn{
+  width:24px;height:24px;flex:0 0 auto;border:none;background:transparent;
+  color:var(--accent);font-size:15px;border-radius:6px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
+.file-row .add-child-btn:active{background:var(--border);}
 .file-row.sub-file{padding-left:46px;}
 .file-row.sub-file .fname{font-size:15px;}
+.file-row-empty-kids{
+  padding:7px 8px 7px 56px;color:var(--text-dim);font-size:13px;font-style:italic;
+}
 .sidebar-foot{
   padding:12px 14px;border-top:1px solid var(--border);
 }
@@ -370,6 +410,8 @@ body{
   position:fixed;inset:0;background:#fff;z-index:60;
   display:flex;flex-direction:column;
   transform:translateY(100%);transition:transform .2s ease;
+  width:100vw;width:100dvw;
+  height:100vh;height:100dvh;
 }
 .preview-panel.show{transform:translateY(0);}
 .preview-head{
@@ -422,8 +464,8 @@ body{
 
 
 /* ---------- Fit-to-screen fixes ---------- */
-html,body{overflow:hidden;max-width:100%;overscroll-behavior:none;}
-body{position:fixed;left:0;top:0;width:100%;height:100%;}
+html,body{overflow:hidden;max-width:100vw;overscroll-behavior:none;}
+body{position:fixed;left:0;top:0;width:100vw;height:100vh;height:100dvh;}
 .brand{min-width:0;flex:1 1 auto;overflow:hidden;}
 .brand #curFileName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .topbar .spacer{display:none;}
@@ -827,28 +869,45 @@ function renderFileList(){
 
       var row = document.createElement("div");
       row.className = "file-row cat-file" + (name === state.active ? " active" : "");
-      var fchev = document.createElement("span");
-      fchev.className = "file-chevron" + (isExpanded ? " open" : "");
-      fchev.textContent = hasKids ? "▸" : "";
-      fchev.addEventListener("click", function(ev){
-        ev.stopPropagation();
-        if(!hasKids) return;
-        state.expanded[name] = !state.expanded[name];
-        persist();
-        renderFileList();
-      });
-      var icon = document.createElement("span");
-      icon.className = "ficon";
-      icon.textContent = hasKids ? "📁" : "";
-      var fname = document.createElement("span");
-      fname.className = "fname";
-      fname.textContent = name;
-      var actions = document.createElement("span");
-      actions.className = "frow-actions";
+
+      // Every top-level file can hold files inside it — the ➕ is always
+      // shown (not just once it already has children) so this is discoverable.
       var addBtn = document.createElement("button");
+      addBtn.className = "add-child-btn";
       addBtn.textContent = "➕";
       addBtn.title = "এটার ভিতরে নতুন ফাইল";
       addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name); });
+
+      // The dropdown arrow + the filename itself both toggle the list of
+      // files inside this one; opening the file itself happens from its icon.
+      var fchev = document.createElement("span");
+      fchev.className = "file-chevron" + (isExpanded ? " open" : "");
+      fchev.textContent = "▸";
+      function toggleExpand(ev){
+        ev.stopPropagation();
+        state.expanded[name] = !state.expanded[name];
+        persist();
+        renderFileList();
+      }
+      fchev.addEventListener("click", toggleExpand);
+
+      var icon = document.createElement("span");
+      icon.className = "ficon";
+      icon.textContent = iconOf(langOf(name));
+      icon.title = "ফাইলটি খুলুন";
+      icon.addEventListener("click", function(ev){
+        ev.stopPropagation();
+        openFile(name);
+        if(!isDesktop) closeSidebar();
+      });
+
+      var fname = document.createElement("span");
+      fname.className = "fname";
+      fname.textContent = name;
+      fname.addEventListener("click", toggleExpand);
+
+      var actions = document.createElement("span");
+      actions.className = "frow-actions";
       var renameBtn = document.createElement("button");
       renameBtn.textContent = "✏️";
       renameBtn.title = "নাম পরিবর্তন";
@@ -857,18 +916,24 @@ function renderFileList(){
       delBtn.textContent = "🗑️";
       delBtn.title = "ডিলিট";
       delBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openDelete(name); });
-      actions.appendChild(addBtn);
       actions.appendChild(renameBtn);
       actions.appendChild(delBtn);
+
+      row.appendChild(addBtn);
       row.appendChild(fchev);
       row.appendChild(icon);
       row.appendChild(fname);
       row.appendChild(actions);
-      row.addEventListener("click", function(){
-        openFile(name);
-        if(!isDesktop) closeSidebar();
-      });
+      // Tapping empty row space (not a button) also toggles the dropdown.
+      row.addEventListener("click", toggleExpand);
       fileList.appendChild(row);
+
+      if(isExpanded && !hasKids){
+        var emptyKids = document.createElement("div");
+        emptyKids.className = "file-row-empty-kids";
+        emptyKids.textContent = "ভিতরে কোনো ফাইল নেই — ➕ চেপে যোগ করুন";
+        fileList.appendChild(emptyKids);
+      }
 
       if(hasKids && isExpanded){
         kids.forEach(function(childName){
@@ -1225,7 +1290,11 @@ function updateKbToolbarPosition(){
 function layoutForKeyboard(){
   var vv = window.visualViewport;
   var kbOpen = kbToolbar.classList.contains("show");
-  if(vv){
+  // Guard against a momentarily wrong/zero reading (some WebViews report
+  // this once right after launch) so the body never gets pinned to a
+  // bogus tiny size — the CSS 100dvh fallback stays in charge until a
+  // sane value shows up.
+  if(vv && vv.width > 100 && vv.height > 100){
     document.body.style.left = vv.offsetLeft + "px";
     document.body.style.top = vv.offsetTop + "px";
     document.body.style.width = vv.width + "px";
@@ -1251,7 +1320,11 @@ function ensureCaretVisible(){
 
 window.addEventListener("scroll", function(){ if(window.scrollX || window.scrollY) window.scrollTo(0,0); });
 window.addEventListener("resize", layoutForKeyboard);
+window.addEventListener("pageshow", layoutForKeyboard);
+window.addEventListener("load", layoutForKeyboard);
+document.addEventListener("visibilitychange", function(){ if(!document.hidden) layoutForKeyboard(); });
 setTimeout(layoutForKeyboard, 0);
+setTimeout(layoutForKeyboard, 300);
 if(window.visualViewport){
   window.visualViewport.addEventListener("resize", layoutForKeyboard);
   window.visualViewport.addEventListener("scroll", layoutForKeyboard);
