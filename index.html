@@ -204,6 +204,13 @@ body{
   border-radius:6px;font-size:13px;cursor:pointer;
 }
 .file-row .frow-actions button:active{background:var(--border);color:var(--text);}
+.file-row .file-chevron{
+  display:inline-block;width:12px;text-align:center;flex:0 0 auto;
+  font-size:10px;color:var(--text-dim);transition:transform .15s ease;
+}
+.file-row .file-chevron.open{transform:rotate(90deg);}
+.file-row.sub-file{padding-left:46px;}
+.file-row.sub-file .fname{font-size:15px;}
 .sidebar-foot{
   padding:12px 14px;border-top:1px solid var(--border);
 }
@@ -472,7 +479,7 @@ body{position:fixed;left:0;top:0;width:100%;height:100%;}
 <!-- New file modal -->
 <div class="modal-backdrop" id="newFileModal">
   <div class="modal">
-    <h3>নতুন ফাইল তৈরি করুন</h3>
+    <h3 id="newFileTitle">নতুন ফাইল তৈরি করুন</h3>
     <input type="text" id="newFileInput" placeholder="যেমন: index.html" autocapitalize="off" autocomplete="off" autocorrect="off">
     <div class="modal-hint">সাপোর্টেড: .html .css .js .py .json .md .txt</div>
     <div class="modal-actions">
@@ -590,8 +597,9 @@ if(!files){
   firstRun = true;
 }
 
-var state = loadState() || { open: [], active: null, collapsed: {} };
+var state = loadState() || { open: [], active: null, collapsed: {}, expanded: {} };
 if(!state.collapsed) state.collapsed = {};
+if(!state.expanded) state.expanded = {};
 if(firstRun){
   state.open = ["welcome.md","index.html","style.css","script.js","main.py"];
   state.active = "welcome.md";
@@ -623,6 +631,25 @@ function langOf(name){
 }
 function iconOf(lang){
   return { html:"🌐", css:"🎨", javascript:"📜", python:"🐍", json:"🧾", markdown:"📝", plain:"📄" }[lang] || "📄";
+}
+
+/* ============ Nested files (a file can hold more files "inside" it) ============
+   A child file is stored under the key "parentName/childName" — the parent's
+   own name never changes, so its siblings (e.g. the next serial number) are
+   never touched. Only one level of nesting is supported. */
+function parentOf(name){
+  var i = name.lastIndexOf("/");
+  return i === -1 ? null : name.slice(0, i);
+}
+function baseName(name){
+  var i = name.lastIndexOf("/");
+  return i === -1 ? name : name.slice(i + 1);
+}
+function displayPath(name){
+  return name.split("/").join(" › ");
+}
+function childrenOf(parent){
+  return Object.keys(files).filter(function(n){ return parentOf(n) === parent; });
 }
 
 /* ============ Tokenizer (regex based, no external deps) ============ */
@@ -747,16 +774,17 @@ var CATEGORY_LABEL = { html:"HTML", css:"CSS", javascript:"JavaScript", python:"
 
 function renderFileList(){
   fileList.innerHTML = "";
-  var names = Object.keys(files).sort(function(a,b){ return a.localeCompare(b); });
-  if(names.length === 0){
+  var topNames = Object.keys(files).filter(function(n){ return !parentOf(n); });
+  if(topNames.length === 0){
     var empty = document.createElement("div");
     empty.style.cssText = "padding:20px 8px;color:var(--text-dim);font-size:13px;text-align:center;";
     empty.textContent = "কোনো ফাইল নেই";
     fileList.appendChild(empty);
     return;
   }
+  topNames.sort(function(a,b){ return a.localeCompare(b); });
   var groups = {};
-  names.forEach(function(name){
+  topNames.forEach(function(name){
     var lang = langOf(name);
     if(!groups[lang]) groups[lang] = [];
     groups[lang].push(name);
@@ -793,16 +821,34 @@ function renderFileList(){
 
     if(isCollapsed) return;
     groups[lang].forEach(function(name){
+      var kids = childrenOf(name).sort(function(a,b){ return a.localeCompare(b); });
+      var hasKids = kids.length > 0;
+      var isExpanded = !!state.expanded[name];
+
       var row = document.createElement("div");
       row.className = "file-row cat-file" + (name === state.active ? " active" : "");
+      var fchev = document.createElement("span");
+      fchev.className = "file-chevron" + (isExpanded ? " open" : "");
+      fchev.textContent = hasKids ? "▸" : "";
+      fchev.addEventListener("click", function(ev){
+        ev.stopPropagation();
+        if(!hasKids) return;
+        state.expanded[name] = !state.expanded[name];
+        persist();
+        renderFileList();
+      });
       var icon = document.createElement("span");
       icon.className = "ficon";
-      icon.textContent = "";
+      icon.textContent = hasKids ? "📁" : "";
       var fname = document.createElement("span");
       fname.className = "fname";
       fname.textContent = name;
       var actions = document.createElement("span");
       actions.className = "frow-actions";
+      var addBtn = document.createElement("button");
+      addBtn.textContent = "➕";
+      addBtn.title = "এটার ভিতরে নতুন ফাইল";
+      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name); });
       var renameBtn = document.createElement("button");
       renameBtn.textContent = "✏️";
       renameBtn.title = "নাম পরিবর্তন";
@@ -811,8 +857,10 @@ function renderFileList(){
       delBtn.textContent = "🗑️";
       delBtn.title = "ডিলিট";
       delBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openDelete(name); });
+      actions.appendChild(addBtn);
       actions.appendChild(renameBtn);
       actions.appendChild(delBtn);
+      row.appendChild(fchev);
       row.appendChild(icon);
       row.appendChild(fname);
       row.appendChild(actions);
@@ -821,6 +869,39 @@ function renderFileList(){
         if(!isDesktop) closeSidebar();
       });
       fileList.appendChild(row);
+
+      if(hasKids && isExpanded){
+        kids.forEach(function(childName){
+          var crow = document.createElement("div");
+          crow.className = "file-row sub-file" + (childName === state.active ? " active" : "");
+          var cicon = document.createElement("span");
+          cicon.className = "ficon";
+          cicon.textContent = iconOf(langOf(childName));
+          var cname = document.createElement("span");
+          cname.className = "fname";
+          cname.textContent = baseName(childName);
+          var cactions = document.createElement("span");
+          cactions.className = "frow-actions";
+          var crenameBtn = document.createElement("button");
+          crenameBtn.textContent = "✏️";
+          crenameBtn.title = "নাম পরিবর্তন";
+          crenameBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openRename(childName); });
+          var cdelBtn = document.createElement("button");
+          cdelBtn.textContent = "🗑️";
+          cdelBtn.title = "ডিলিট";
+          cdelBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openDelete(childName); });
+          cactions.appendChild(crenameBtn);
+          cactions.appendChild(cdelBtn);
+          crow.appendChild(cicon);
+          crow.appendChild(cname);
+          crow.appendChild(cactions);
+          crow.addEventListener("click", function(){
+            openFile(childName);
+            if(!isDesktop) closeSidebar();
+          });
+          fileList.appendChild(crow);
+        });
+      }
     });
   });
 }
@@ -835,7 +916,8 @@ function renderTabs(){
     dot.className = "dot";
     var tname = document.createElement("span");
     tname.className = "tname";
-    tname.textContent = name;
+    tname.textContent = baseName(name);
+    tab.title = displayPath(name);
     var tclose = document.createElement("span");
     tclose.className = "tclose";
     tclose.textContent = "✕";
@@ -911,7 +993,7 @@ function renderGroupBar(){
     groups[groupBarOpen].forEach(function(name){
       var item = document.createElement("div");
       item.className = "group-dd-item" + (name === state.active ? " active" : "");
-      item.textContent = name;
+      item.textContent = displayPath(name);
       item.addEventListener("click", function(ev){
         ev.stopPropagation();
         openFile(name);
@@ -987,7 +1069,7 @@ function loadIntoEditor(){
   editorScroll.style.display = "flex";
   downloadBtn.disabled = false;
   saveBtn.disabled = false;
-  curFileName.textContent = state.active;
+  curFileName.textContent = displayPath(state.active);
   inputLayer.value = files[state.active] || "";
   refreshHighlight();
   syncGutter();
@@ -1093,9 +1175,9 @@ var KB_NAV_KEYS = [
   { label:"→", action:kbMoveRight },
   { label:"↑", action:kbMoveUp },
   { label:"↓", action:kbMoveDown },
-  "{", "}", "[", "]", "(", ")"
+  "{", "}", "[", "]", "(", ")", "+"
 ];
-var KB_SYM_KEYS = ["<",">",",",";",":",".","\"","/","\\"];
+var KB_SYM_KEYS = ["<",">",",",";",":",".","\"","/","\\","="];
 
 function buildKbRow(container, items){
   items.forEach(function(item){
@@ -1191,22 +1273,63 @@ inputLayer.addEventListener("blur", function(){
 function showModal(el){ el.classList.add("show"); }
 function hideModal(el){ el.classList.remove("show"); }
 
+function nextSerialNumber(){
+  // Looks at existing TOP-LEVEL file names like "38 Sort() ...", finds the
+  // highest leading number, and suggests the next one. Existing files are
+  // never touched or renumbered by this — it only prefills the new-file box.
+  var max = 0;
+  Object.keys(files).forEach(function(name){
+    if(parentOf(name)) return; // ignore nested files
+    var m = name.match(/^(\d+)\s/);
+    if(m){ var n = parseInt(m[1], 10); if(n > max) max = n; }
+  });
+  return max + 1;
+}
+
+var newFileParent = null; // when set, the new file is created *inside* this file
+
 newFileBtn.addEventListener("click", function(){
-  newFileInput.value = "";
+  newFileParent = null;
+  $("newFileTitle").textContent = "নতুন ফাইল তৈরি করুন";
+  var next = nextSerialNumber();
+  newFileInput.value = next + " ";
   showModal(newFileModal);
-  setTimeout(function(){ newFileInput.focus(); }, 50);
+  setTimeout(function(){
+    newFileInput.focus();
+    var pos = newFileInput.value.length;
+    newFileInput.setSelectionRange(pos, pos);
+  }, 50);
 });
+
+// "+ নতুন ফাইল" shown on a file's own row — creates a file *inside* it
+// (e.g. "38 ...html" keeps its number; this adds "38 ...html/2.html" etc.)
+function openNewFileFor(parentName){
+  newFileParent = parentName;
+  $("newFileTitle").textContent = '"' + baseName(parentName) + '" এর ভিতরে নতুন ফাইল';
+  var ext = extOf(parentName);
+  var count = childrenOf(parentName).length + 1;
+  newFileInput.value = ext ? (count + "." + ext) : String(count);
+  showModal(newFileModal);
+  setTimeout(function(){
+    newFileInput.focus();
+    newFileInput.select();
+  }, 50);
+}
+
 $("newFileCancel").addEventListener("click", function(){ hideModal(newFileModal); });
 newFileModal.addEventListener("click", function(e){ if(e.target === newFileModal) hideModal(newFileModal); });
 function createNewFile(){
-  var name = newFileInput.value.trim();
-  if(!name){ showToast("ফাইলের নাম দিন"); return; }
+  var raw = newFileInput.value.trim().replace(/\//g, "-");
+  if(!raw){ showToast("ফাইলের নাম দিন"); return; }
+  var name = newFileParent ? (newFileParent + "/" + raw) : raw;
   if(files.hasOwnProperty(name)){ showToast("এই নামে ফাইল আগে থেকেই আছে"); return; }
   files[name] = "";
+  if(newFileParent) state.expanded[newFileParent] = true;
   hideModal(newFileModal);
   openFile(name);
   if(!isDesktop) closeSidebar();
   showToast("ফাইল তৈরি হয়েছে");
+  newFileParent = null;
 }
 $("newFileCreate").addEventListener("click", createNewFile);
 newFileInput.addEventListener("keydown", function(e){ if(e.key === "Enter") createNewFile(); });
