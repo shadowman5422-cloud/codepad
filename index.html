@@ -164,7 +164,15 @@ body{
 .group-dd-item{
   padding:9px 12px;border-radius:8px;font-size:13.5px;
   color:var(--text);cursor:pointer;
+  display:flex;align-items:center;gap:8px;
 }
+.group-dd-item .dd-item-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.group-dd-item .dd-item-del{
+  flex:0 0 auto;width:24px;height:24px;border:none;background:transparent;
+  color:var(--text-dim);border-radius:6px;font-size:12px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
+.group-dd-item .dd-item-del:active{background:var(--border);color:var(--danger);}
 .group-dd-item.active{background:var(--bg-elev);color:var(--accent);font-weight:600;}
 .group-dd-item:active{background:var(--border);}
 
@@ -281,6 +289,21 @@ body{
 .tab .tclose:active{background:var(--border);}
 .tab .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);display:none;flex:0 0 auto;}
 .tab.dirty .dot{display:block;}
+.tab .tab-add-btn{
+  width:18px;height:18px;border-radius:5px;display:flex;align-items:center;justify-content:center;
+  font-size:11px;flex:0 0 auto;
+}
+.tab .tab-add-btn:active{background:var(--border);}
+.tab .tdrop{
+  font-size:9px;color:var(--text-dim);flex:0 0 auto;
+  transition:transform .15s ease;margin-left:1px;
+}
+.tab .tdrop.open{transform:rotate(180deg);}
+.active-child-bar{
+  flex:0 0 auto;display:flex;align-items:center;gap:6px;
+  padding:7px 14px;font-size:13.5px;color:var(--accent);
+  background:var(--bg-elev);border-bottom:1px solid var(--border);
+}
 
 /* ---------- Editor ---------- */
 .editor-wrap{flex:1;position:relative;min-height:0;background:var(--bg);}
@@ -502,6 +525,8 @@ body{position:fixed;left:0;top:0;width:100vw;height:100vh;height:100dvh;}
 
   <div class="editor-col">
     <div class="tabs" id="tabs"></div>
+    <div class="group-dropdown" id="tabDropdown" style="display:none;"></div>
+    <div class="active-child-bar" id="activeChildBar" style="display:none;"></div>
     <div class="editor-wrap">
       <div class="editor-empty" id="emptyState">
         <div class="big">📄</div>
@@ -646,8 +671,10 @@ if(firstRun){
   state.open = ["welcome.md","index.html","style.css","script.js","main.py"];
   state.active = "welcome.md";
 }
-// prune tabs pointing to deleted files
-state.open = state.open.filter(function(f){ return files.hasOwnProperty(f); });
+// prune tabs pointing to deleted files, and any nested/child file that
+// ended up in the open-tabs list by mistake — children only ever show
+// inside their parent's own ➕/dropdown, never as a tab of their own.
+state.open = state.open.filter(function(f){ return files.hasOwnProperty(f) && !parentOf(f); });
 if(state.active && !files.hasOwnProperty(state.active)) state.active = null;
 if(!state.active && state.open.length) state.active = state.open[0];
 
@@ -775,6 +802,9 @@ var $ = function(id){ return document.getElementById(id); };
 var sidebar = $("sidebar"), sidebarBackdrop = $("sidebarBackdrop"), menuToggle = $("menuToggle"), sidebarClose = $("sidebarClose");
 var fileList = $("fileList");
 var tabsEl = $("tabs");
+var tabDropdownEl = $("tabDropdown");
+var activeChildBarEl = $("activeChildBar");
+var tabDropdownOpen = null; // name of the open tab whose child list is showing
 var editorScroll = $("editorScroll"), emptyState = $("emptyState");
 var gutter = $("gutter");
 var highlightCode = $("highlightCode");
@@ -975,8 +1005,17 @@ function renderFileList(){
 function renderTabs(){
   tabsEl.innerHTML = "";
   state.open.forEach(function(name){
+    // Only a top-level file can hold files inside it (one level of nesting),
+    // so only its tab gets the ➕ / dropdown treatment — and every top-level
+    // tab gets the ➕ regardless of whether it already has children, same
+    // as in the sidebar, so adding the first child file is discoverable.
+    var isTopLevel = !parentOf(name);
+    var hasKids = isTopLevel && childrenOf(name).length > 0;
+    // If a child of this file is the active one, its parent's tab still
+    // lights up as active — there's no separate tab for the child itself.
+    var isActive = name === state.active || (state.active && parentOf(state.active) === name) || tabDropdownOpen === name;
     var tab = document.createElement("div");
-    tab.className = "tab" + (name === state.active ? " active" : "");
+    tab.className = "tab" + (isActive ? " active" : "");
     var dot = document.createElement("span");
     dot.className = "dot";
     var tname = document.createElement("span");
@@ -988,14 +1027,104 @@ function renderTabs(){
     tclose.textContent = "✕";
     tclose.addEventListener("click", function(ev){ ev.stopPropagation(); closeTab(name); });
     tab.appendChild(dot);
+    if(isTopLevel){
+      var addBtn = document.createElement("span");
+      addBtn.className = "tab-add-btn";
+      addBtn.textContent = "➕";
+      addBtn.title = "এটার ভিতরে নতুন ফাইল";
+      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name); });
+      tab.appendChild(addBtn);
+    }
     tab.appendChild(tname);
+    // The dropdown arrow only shows up once this file actually holds a
+    // child file — that's the visible cue that there's a list to open.
+    if(hasKids){
+      var tdrop = document.createElement("span");
+      tdrop.className = "tdrop" + (tabDropdownOpen === name ? " open" : "");
+      tdrop.textContent = "▾";
+      tab.appendChild(tdrop);
+    }
     tab.appendChild(tclose);
-    tab.addEventListener("click", function(){ openFile(name); });
+    tab.addEventListener("click", function(ev){
+      if(hasKids){
+        // Stop this click from bubbling to the document-level "close the
+        // dropdown on an outside click" listener below — by the time that
+        // listener runs, renderTabs() has already rebuilt the tab as a new
+        // element, so tabsEl.contains(ev.target) would wrongly say this
+        // click landed outside the tab bar and slam the dropdown shut
+        // again right after opening it.
+        ev.stopPropagation();
+        tabDropdownOpen = (tabDropdownOpen === name) ? null : name;
+        renderTabs();
+      } else {
+        openFile(name);
+      }
+    });
     tabsEl.appendChild(tab);
   });
   var activeTabEl = tabsEl.querySelector(".tab.active");
   if(activeTabEl){
     activeTabEl.scrollIntoView({ behavior: "auto", inline: "nearest", block: "nearest" });
+  }
+
+  // The ➕/dropdown list of files inside whichever open tab was tapped.
+  if(tabDropdownOpen && state.open.indexOf(tabDropdownOpen) !== -1){
+    var kids = childrenOf(tabDropdownOpen).sort(function(a,b){ return a.localeCompare(b); });
+    tabDropdownEl.style.display = "flex";
+    tabDropdownEl.innerHTML = "";
+    if(kids.length === 0){
+      var empty = document.createElement("div");
+      empty.className = "group-dd-item";
+      empty.style.color = "var(--text-dim)";
+      empty.textContent = "ভিতরে কোনো ফাইল নেই — ➕ চেপে যোগ করুন";
+      tabDropdownEl.appendChild(empty);
+    } else {
+      kids.forEach(function(childName){
+        var item = document.createElement("div");
+        item.className = "group-dd-item" + (childName === state.active ? " active" : "");
+        var label = document.createElement("span");
+        label.className = "dd-item-label";
+        label.textContent = baseName(childName);
+        var delBtn = document.createElement("button");
+        delBtn.className = "dd-item-del";
+        delBtn.textContent = "✕";
+        delBtn.title = "ডিলিট";
+        delBtn.addEventListener("click", function(ev){
+          ev.stopPropagation();
+          openDelete(childName);
+        });
+        item.appendChild(label);
+        item.appendChild(delBtn);
+        item.addEventListener("click", function(ev){
+          ev.stopPropagation();
+          openFile(childName);
+          tabDropdownOpen = null;
+          renderTabs();
+        });
+        tabDropdownEl.appendChild(item);
+      });
+    }
+  } else {
+    tabDropdownOpen = null;
+    tabDropdownEl.style.display = "none";
+  }
+
+  // A thin bar right under the tabs naming whichever child file is
+  // currently active, since the child itself never gets its own tab.
+  var activeParent = state.active ? parentOf(state.active) : null;
+  if(activeParent){
+    activeChildBarEl.style.display = "flex";
+    activeChildBarEl.innerHTML = "";
+    var arrow = document.createElement("span");
+    arrow.textContent = "↳";
+    var label = document.createElement("span");
+    label.textContent = baseName(state.active);
+    label.style.fontWeight = "600";
+    activeChildBarEl.appendChild(arrow);
+    activeChildBarEl.appendChild(label);
+  } else {
+    activeChildBarEl.style.display = "none";
+    activeChildBarEl.innerHTML = "";
   }
 }
 
@@ -1079,11 +1208,20 @@ document.addEventListener("click", function(ev){
   groupBarOpen = null;
   renderGroupBar();
 });
+document.addEventListener("click", function(ev){
+  if(!tabDropdownOpen) return;
+  if(tabsEl.contains(ev.target) || tabDropdownEl.contains(ev.target)) return;
+  tabDropdownOpen = null;
+  renderTabs();
+});
 
 /* ============ Editor state ============ */
 function openFile(name){
   if(!files.hasOwnProperty(name)) return;
-  if(state.open.indexOf(name) === -1) state.open.push(name);
+  // A child (nested) file is edited in the normal editor like any other
+  // file, but it never gets its own tab — only a top-level file does.
+  // While a child is active its parent's tab (if open) is shown as active.
+  if(!parentOf(name) && state.open.indexOf(name) === -1) state.open.push(name);
   state.active = name;
   persist();
   renderAll();
