@@ -496,6 +496,45 @@ body{position:fixed;left:0;top:0;width:100vw;height:100vh;height:100dvh;}
 .kb-toolbar{left:0;right:0;}
 .kb-key{min-width:0;padding:0;}
 .modal input{font-size:16px;}
+
+/* ============ Split panel (second independent editor) ============ */
+.split-arrow{
+  position:fixed;top:50%;right:0;transform:translateY(-50%);
+  width:22px;height:60px;border:none;border-radius:10px 0 0 10px;
+  background:var(--danger);color:#2b0808;font-size:16px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  z-index:600;box-shadow:-2px 2px 10px rgba(0,0,0,.35);
+  transition:right .22s ease;
+  padding:0;
+}
+.split-arrow:active{filter:brightness(.92);}
+.split-panel{
+  position:fixed;top:0;right:0;height:100vh;height:100dvh;
+  width:60vw;min-width:220px;max-width:100vw;
+  background:var(--bg);border-left:1px solid var(--border);
+  box-shadow:-6px 0 28px rgba(0,0,0,.4);
+  transform:translateX(100%);
+  transition:transform .22s ease;
+  z-index:590;display:flex;
+}
+.split-panel.show{transform:translateX(0);}
+.split-inner{
+  flex:1;min-width:0;
+  display:flex;flex-direction:column;
+  position:relative;overflow:hidden;
+}
+.split-inner .sidebar-backdrop{position:absolute;}
+.split-inner .sidebar{position:absolute;}
+.split-resize-handle{
+  position:absolute;left:-7px;top:0;bottom:0;width:14px;
+  cursor:col-resize;z-index:595;touch-action:none;
+  display:flex;align-items:center;justify-content:center;
+}
+.split-resize-handle::after{
+  content:"";width:4px;height:44px;border-radius:3px;
+  background:var(--border);
+}
+.split-resize-handle:active::after{background:var(--accent);}
 </style>
 </head>
 <body>
@@ -612,6 +651,48 @@ body{position:fixed;left:0;top:0;width:100vw;height:100vh;height:100dvh;}
   <iframe id="previewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"></iframe>
 </div>
 
+<button class="split-arrow" id="splitArrow" title="পাশে আরেকটা স্বাধীন এডিটর খুলুন">‹</button>
+<div class="split-panel" id="splitPanel">
+  <div class="split-resize-handle" id="splitResizeHandle"></div>
+  <div class="split-inner" id="splitInner">
+    <div class="topbar" id="topbar2">
+      <button class="icon-btn menu-toggle" id="menuToggle2" aria-label="ফাইল তালিকা">☰</button>
+      <div class="brand"><span class="logo">&lt;/&gt;</span><span id="curFileName2">CodePad</span></div>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="runBtn2" title="প্রিভিউ" style="display:none;">▶</button>
+      <button class="icon-btn accent" id="saveBtn2" title="সেভ">💾</button>
+    </div>
+    <div class="main">
+      <div class="sidebar-backdrop" id="sidebarBackdrop2"></div>
+      <div class="sidebar" id="sidebar2">
+        <div class="sidebar-head"><h2>ফাইলসমূহ</h2><button class="icon-btn" id="sidebarClose2" style="display:none;">✕</button></div>
+        <div class="file-list" id="fileList2"></div>
+        <div class="sidebar-foot">
+          <button class="new-file-btn" id="newFileBtn2">+ নতুন ফাইল</button>
+        </div>
+      </div>
+      <div class="editor-col">
+        <div class="tabs" id="tabs2"></div>
+        <div class="group-dropdown" id="tabDropdown2" style="display:none;"></div>
+        <div class="active-child-bar" id="activeChildBar2" style="display:none;"></div>
+        <div class="editor-wrap">
+          <div class="editor-empty" id="emptyState2">
+            <div class="big">📄</div>
+            <div>কোনো ফাইল খোলা নেই<br><span style="color:var(--text-dim);font-size:13px;">"+ নতুন ফাইল" চেপে শুরু করুন</span></div>
+          </div>
+          <div class="editor-scroll" id="editorScroll2" style="display:none;">
+            <div class="gutter" id="gutter2">1</div>
+            <div class="code-area">
+              <pre class="highlight-layer" id="highlightLayer2"><code id="highlightCode2"></code></pre>
+              <textarea class="input-layer" id="inputLayer2" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <div class="kb-toolbar" id="kbToolbar">
@@ -625,8 +706,15 @@ body{position:fixed;left:0;top:0;width:100vw;height:100vh;height:100dvh;}
 "use strict";
 
 /* ============ Storage helpers ============ */
+// The split panel (added below) is a second, fully independent editor that
+// runs in this very same page/script — not a separate document — so both
+// panes simply share the one `files` object in memory. Each pane just keeps
+// its own "which tabs are open / which file is active" bookkeeping (state /
+// state2) under its own localStorage key, so picking a different file on
+// one side never disturbs the other.
 var STORE_KEY = "codepad_files_v1";
 var STATE_KEY = "codepad_state_v1";
+var STATE2_KEY = "codepad_state_v2_split";
 
 function loadFiles(){
   try{
@@ -638,15 +726,15 @@ function loadFiles(){
 function saveFiles(files){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(files)); }catch(e){ /* storage unavailable */ }
 }
-function loadState(){
+function loadState(key){
   try{
-    var raw = localStorage.getItem(STATE_KEY);
+    var raw = localStorage.getItem(key);
     if(raw) return JSON.parse(raw);
   }catch(e){}
   return null;
 }
-function saveState(state){
-  try{ localStorage.setItem(STATE_KEY, JSON.stringify(state)); }catch(e){}
+function saveState(key, s){
+  try{ localStorage.setItem(key, JSON.stringify(s)); }catch(e){}
 }
 
 var DEFAULT_FILES = {
@@ -664,7 +752,7 @@ if(!files){
   firstRun = true;
 }
 
-var state = loadState() || { open: [], active: null, collapsed: {}, expanded: {} };
+var state = loadState(STATE_KEY) || { open: [], active: null, collapsed: {}, expanded: {} };
 if(!state.collapsed) state.collapsed = {};
 if(!state.expanded) state.expanded = {};
 if(firstRun){
@@ -678,9 +766,31 @@ state.open = state.open.filter(function(f){ return files.hasOwnProperty(f) && !p
 if(state.active && !files.hasOwnProperty(state.active)) state.active = null;
 if(!state.active && state.open.length) state.active = state.open[0];
 
+// Pane 2 (the slide-out split panel) — its own open tabs/active file,
+// starting empty even on first run, since it's a secondary workspace.
+var state2 = loadState(STATE2_KEY) || { open: [], active: null, collapsed: {}, expanded: {} };
+if(!state2.collapsed) state2.collapsed = {};
+if(!state2.expanded) state2.expanded = {};
+state2.open = state2.open.filter(function(f){ return files.hasOwnProperty(f) && !parentOf(f); });
+if(state2.active && !files.hasOwnProperty(state2.active)) state2.active = null;
+if(!state2.active && state2.open.length) state2.active = state2.open[0];
+
 function persist(){
   saveFiles(files);
-  saveState(state);
+  saveState(STATE_KEY, state);
+}
+function persistPane2(){
+  saveFiles(files);
+  saveState(STATE2_KEY, state2);
+}
+function pruneStateForFiles(s){
+  s.open = s.open.filter(function(f){ return files.hasOwnProperty(f) && !parentOf(f); });
+  if(s.active && !files.hasOwnProperty(s.active)) s.active = s.open.length ? s.open[0] : null;
+}
+function renameInState(s, oldName, newName){
+  var idx = s.open.indexOf(oldName);
+  if(idx !== -1) s.open[idx] = newName;
+  if(s.active === oldName) s.active = newName;
 }
 
 /* ============ Language detection ============ */
@@ -815,6 +925,26 @@ var newFileBtn = $("newFileBtn"), newFileModal = $("newFileModal"), newFileInput
 var toastEl = $("toast");
 var isDesktop = false; // sidebar is always a slide-over panel opened with the ☰ button
 
+// Pane 2 (the slide-out split panel) — a second, fully independent editor
+// living inside #splitPanel, reusing the exact same markup/CSS classes.
+var topbar2 = $("topbar2");
+var sidebar2 = $("sidebar2"), sidebarBackdrop2 = $("sidebarBackdrop2"), menuToggle2 = $("menuToggle2"), sidebarClose2 = $("sidebarClose2");
+var fileList2 = $("fileList2");
+var tabsEl2 = $("tabs2");
+var tabDropdownEl2 = $("tabDropdown2");
+var activeChildBarEl2 = $("activeChildBar2");
+var tabDropdownOpen2 = null;
+var editorScroll2 = $("editorScroll2"), emptyState2 = $("emptyState2");
+var gutter2 = $("gutter2");
+var highlightCode2 = $("highlightCode2");
+var inputLayer2 = $("inputLayer2");
+var curFileName2 = $("curFileName2");
+var runBtn2 = $("runBtn2"), saveBtn2 = $("saveBtn2");
+var newFileBtn2 = $("newFileBtn2");
+// whichever of inputLayer/inputLayer2 last had focus — the on-screen
+// keyboard toolbar (arrows/brackets) always acts on this one.
+var activeInputLayer = inputLayer;
+
 /* ============ Sidebar open/close ============ */
 function openSidebar(){
   // start just below the top bar so the ☰ button stays tappable to close it again
@@ -830,6 +960,22 @@ menuToggle.addEventListener("click", function(){
   sidebar.classList.contains("open") ? closeSidebar() : openSidebar();
 });
 sidebarBackdrop.addEventListener("click", closeSidebar);
+
+function openSidebar2(){
+  // pane 2's own topbar/sidebar are positioned relative to #splitInner,
+  // not the viewport, so this only needs that local topbar's height.
+  var top = topbar2.offsetHeight;
+  sidebar2.style.top = top + "px";
+  sidebarBackdrop2.style.top = top + "px";
+  sidebar2.style.paddingTop = "0px";
+  sidebar2.classList.add("open");
+  sidebarBackdrop2.classList.add("show");
+}
+function closeSidebar2(){ sidebar2.classList.remove("open"); sidebarBackdrop2.classList.remove("show"); }
+menuToggle2.addEventListener("click", function(){
+  sidebar2.classList.contains("open") ? closeSidebar2() : openSidebar2();
+});
+sidebarBackdrop2.addEventListener("click", closeSidebar2);
 
 /* ============ Toast ============ */
 var toastTimer;
@@ -906,7 +1052,7 @@ function renderFileList(){
       addBtn.className = "add-child-btn";
       addBtn.textContent = "➕";
       addBtn.title = "এটার ভিতরে নতুন ফাইল";
-      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name); });
+      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name, 1); });
 
       // The dropdown arrow + the filename itself both toggle the list of
       // files inside this one; opening the file itself happens from its icon.
@@ -1001,6 +1147,159 @@ function renderFileList(){
   });
 }
 
+/* ============ Rendering: file list (pane 2 — the split panel) ============ */
+function renderFileList2(){
+  fileList2.innerHTML = "";
+  var topNames = Object.keys(files).filter(function(n){ return !parentOf(n); });
+  if(topNames.length === 0){
+    var empty = document.createElement("div");
+    empty.style.cssText = "padding:20px 8px;color:var(--text-dim);font-size:13px;text-align:center;";
+    empty.textContent = "কোনো ফাইল নেই";
+    fileList2.appendChild(empty);
+    return;
+  }
+  topNames.sort(function(a,b){ return a.localeCompare(b); });
+  var groups = {};
+  topNames.forEach(function(name){
+    var lang = langOf(name);
+    if(!groups[lang]) groups[lang] = [];
+    groups[lang].push(name);
+  });
+  var orderedLangs = CATEGORY_ORDER.filter(function(l){ return groups[l]; });
+  Object.keys(groups).forEach(function(l){ if(orderedLangs.indexOf(l) === -1) orderedLangs.push(l); });
+
+  orderedLangs.forEach(function(lang){
+    var isCollapsed = !!state2.collapsed[lang];
+    var header = document.createElement("div");
+    header.className = "cat-header";
+    var chevron = document.createElement("span");
+    chevron.className = "cat-chevron" + (isCollapsed ? "" : " open");
+    chevron.textContent = "▸";
+    var catIcon = document.createElement("span");
+    catIcon.className = "ficon";
+    catIcon.textContent = iconOf(lang);
+    var catName = document.createElement("span");
+    catName.className = "fname";
+    catName.textContent = CATEGORY_LABEL[lang] || lang;
+    var catCount = document.createElement("span");
+    catCount.className = "cat-count";
+    catCount.textContent = groups[lang].length;
+    header.appendChild(chevron);
+    header.appendChild(catIcon);
+    header.appendChild(catName);
+    header.appendChild(catCount);
+    header.addEventListener("click", function(){
+      state2.collapsed[lang] = !state2.collapsed[lang];
+      persistPane2();
+      renderFileList2();
+    });
+    fileList2.appendChild(header);
+
+    if(isCollapsed) return;
+    groups[lang].forEach(function(name){
+      var kids = childrenOf(name).sort(function(a,b){ return a.localeCompare(b); });
+      var hasKids = kids.length > 0;
+      var isExpanded = !!state2.expanded[name];
+
+      var row = document.createElement("div");
+      row.className = "file-row cat-file" + (name === state2.active ? " active" : "");
+
+      var addBtn = document.createElement("button");
+      addBtn.className = "add-child-btn";
+      addBtn.textContent = "➕";
+      addBtn.title = "এটার ভিতরে নতুন ফাইল";
+      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name, 2); });
+
+      var fchev = document.createElement("span");
+      fchev.className = "file-chevron" + (isExpanded ? " open" : "");
+      fchev.textContent = "▸";
+      function toggleExpand2(ev){
+        ev.stopPropagation();
+        state2.expanded[name] = !state2.expanded[name];
+        persistPane2();
+        renderFileList2();
+      }
+      fchev.addEventListener("click", toggleExpand2);
+
+      var icon = document.createElement("span");
+      icon.className = "ficon";
+      icon.textContent = iconOf(langOf(name));
+      icon.title = "ফাইলটি খুলুন";
+      icon.addEventListener("click", function(ev){
+        ev.stopPropagation();
+        openFile2(name);
+        if(!isDesktop) closeSidebar2();
+      });
+
+      var fname = document.createElement("span");
+      fname.className = "fname";
+      fname.textContent = name;
+      fname.addEventListener("click", toggleExpand2);
+
+      var actions = document.createElement("span");
+      actions.className = "frow-actions";
+      var renameBtn = document.createElement("button");
+      renameBtn.textContent = "✏️";
+      renameBtn.title = "নাম পরিবর্তন";
+      renameBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openRename(name); });
+      var delBtn = document.createElement("button");
+      delBtn.textContent = "🗑️";
+      delBtn.title = "ডিলিট";
+      delBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openDelete(name); });
+      actions.appendChild(renameBtn);
+      actions.appendChild(delBtn);
+
+      row.appendChild(addBtn);
+      row.appendChild(fchev);
+      row.appendChild(icon);
+      row.appendChild(fname);
+      row.appendChild(actions);
+      row.addEventListener("click", toggleExpand2);
+      fileList2.appendChild(row);
+
+      if(isExpanded && !hasKids){
+        var emptyKids = document.createElement("div");
+        emptyKids.className = "file-row-empty-kids";
+        emptyKids.textContent = "ভিতরে কোনো ফাইল নেই — ➕ চেপে যোগ করুন";
+        fileList2.appendChild(emptyKids);
+      }
+
+      if(hasKids && isExpanded){
+        kids.forEach(function(childName){
+          var crow = document.createElement("div");
+          crow.className = "file-row sub-file" + (childName === state2.active ? " active" : "");
+          var cicon = document.createElement("span");
+          cicon.className = "ficon";
+          cicon.textContent = iconOf(langOf(childName));
+          var cname = document.createElement("span");
+          cname.className = "fname";
+          cname.textContent = baseName(childName);
+          var cactions = document.createElement("span");
+          cactions.className = "frow-actions";
+          var crenameBtn = document.createElement("button");
+          crenameBtn.textContent = "✏️";
+          crenameBtn.title = "নাম পরিবর্তন";
+          crenameBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openRename(childName); });
+          var cdelBtn = document.createElement("button");
+          cdelBtn.textContent = "🗑️";
+          cdelBtn.title = "ডিলিট";
+          cdelBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openDelete(childName); });
+          cactions.appendChild(crenameBtn);
+          cactions.appendChild(cdelBtn);
+          crow.appendChild(cicon);
+          crow.appendChild(cname);
+          crow.appendChild(cactions);
+          crow.addEventListener("click", function(){
+            openFile2(childName);
+            if(!isDesktop) closeSidebar2();
+          });
+          fileList2.appendChild(crow);
+        });
+      }
+    });
+  });
+}
+
 /* ============ Rendering: tabs ============ */
 function renderTabs(){
   tabsEl.innerHTML = "";
@@ -1032,7 +1331,7 @@ function renderTabs(){
       addBtn.className = "tab-add-btn";
       addBtn.textContent = "➕";
       addBtn.title = "এটার ভিতরে নতুন ফাইল";
-      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name); });
+      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name, 1); });
       tab.appendChild(addBtn);
     }
     tab.appendChild(tname);
@@ -1128,6 +1427,116 @@ function renderTabs(){
   }
 }
 
+/* ============ Rendering: tabs (pane 2 — the split panel) ============ */
+function renderTabs2(){
+  tabsEl2.innerHTML = "";
+  state2.open.forEach(function(name){
+    var isTopLevel = !parentOf(name);
+    var hasKids = isTopLevel && childrenOf(name).length > 0;
+    var isActive = name === state2.active || (state2.active && parentOf(state2.active) === name) || tabDropdownOpen2 === name;
+    var tab = document.createElement("div");
+    tab.className = "tab" + (isActive ? " active" : "");
+    var dot = document.createElement("span");
+    dot.className = "dot";
+    var tname = document.createElement("span");
+    tname.className = "tname";
+    tname.textContent = baseName(name);
+    tab.title = displayPath(name);
+    var tclose = document.createElement("span");
+    tclose.className = "tclose";
+    tclose.textContent = "✕";
+    tclose.addEventListener("click", function(ev){ ev.stopPropagation(); closeTab2(name); });
+    tab.appendChild(dot);
+    if(isTopLevel){
+      var addBtn = document.createElement("span");
+      addBtn.className = "tab-add-btn";
+      addBtn.textContent = "➕";
+      addBtn.title = "এটার ভিতরে নতুন ফাইল";
+      addBtn.addEventListener("click", function(ev){ ev.stopPropagation(); openNewFileFor(name, 2); });
+      tab.appendChild(addBtn);
+    }
+    tab.appendChild(tname);
+    if(hasKids){
+      var tdrop = document.createElement("span");
+      tdrop.className = "tdrop" + (tabDropdownOpen2 === name ? " open" : "");
+      tdrop.textContent = "▾";
+      tab.appendChild(tdrop);
+    }
+    tab.appendChild(tclose);
+    tab.addEventListener("click", function(ev){
+      if(hasKids){
+        ev.stopPropagation();
+        tabDropdownOpen2 = (tabDropdownOpen2 === name) ? null : name;
+        renderTabs2();
+      } else {
+        openFile2(name);
+      }
+    });
+    tabsEl2.appendChild(tab);
+  });
+  var activeTabEl2 = tabsEl2.querySelector(".tab.active");
+  if(activeTabEl2){
+    activeTabEl2.scrollIntoView({ behavior: "auto", inline: "nearest", block: "nearest" });
+  }
+
+  if(tabDropdownOpen2 && state2.open.indexOf(tabDropdownOpen2) !== -1){
+    var kids = childrenOf(tabDropdownOpen2).sort(function(a,b){ return a.localeCompare(b); });
+    tabDropdownEl2.style.display = "flex";
+    tabDropdownEl2.innerHTML = "";
+    if(kids.length === 0){
+      var empty = document.createElement("div");
+      empty.className = "group-dd-item";
+      empty.style.color = "var(--text-dim)";
+      empty.textContent = "ভিতরে কোনো ফাইল নেই — ➕ চেপে যোগ করুন";
+      tabDropdownEl2.appendChild(empty);
+    } else {
+      kids.forEach(function(childName){
+        var item = document.createElement("div");
+        item.className = "group-dd-item" + (childName === state2.active ? " active" : "");
+        var label = document.createElement("span");
+        label.className = "dd-item-label";
+        label.textContent = baseName(childName);
+        var delBtn = document.createElement("button");
+        delBtn.className = "dd-item-del";
+        delBtn.textContent = "✕";
+        delBtn.title = "ডিলিট";
+        delBtn.addEventListener("click", function(ev){
+          ev.stopPropagation();
+          openDelete(childName);
+        });
+        item.appendChild(label);
+        item.appendChild(delBtn);
+        item.addEventListener("click", function(ev){
+          ev.stopPropagation();
+          openFile2(childName);
+          tabDropdownOpen2 = null;
+          renderTabs2();
+        });
+        tabDropdownEl2.appendChild(item);
+      });
+    }
+  } else {
+    tabDropdownOpen2 = null;
+    tabDropdownEl2.style.display = "none";
+  }
+
+  var activeParent2 = state2.active ? parentOf(state2.active) : null;
+  if(activeParent2){
+    activeChildBarEl2.style.display = "flex";
+    activeChildBarEl2.innerHTML = "";
+    var arrow2 = document.createElement("span");
+    arrow2.textContent = "↳";
+    var label2 = document.createElement("span");
+    label2.textContent = baseName(state2.active);
+    label2.style.fontWeight = "600";
+    activeChildBarEl2.appendChild(arrow2);
+    activeChildBarEl2.appendChild(label2);
+  } else {
+    activeChildBarEl2.style.display = "none";
+    activeChildBarEl2.innerHTML = "";
+  }
+}
+
 /* ============ Rendering: group bar (quick category dropdown) ============ */
 var groupBarEl = $("groupBar");
 var groupDropdownEl = $("groupDropdown");
@@ -1214,6 +1623,12 @@ document.addEventListener("click", function(ev){
   tabDropdownOpen = null;
   renderTabs();
 });
+document.addEventListener("click", function(ev){
+  if(!tabDropdownOpen2) return;
+  if(tabsEl2.contains(ev.target) || tabDropdownEl2.contains(ev.target)) return;
+  tabDropdownOpen2 = null;
+  renderTabs2();
+});
 
 /* ============ Editor state ============ */
 function openFile(name){
@@ -1287,12 +1702,82 @@ function renderAll(){
   loadIntoEditor();
 }
 
+/* ============ Editor state (pane 2 — the split panel) ============ */
+function openFile2(name){
+  if(!files.hasOwnProperty(name)) return;
+  if(!parentOf(name) && state2.open.indexOf(name) === -1) state2.open.push(name);
+  state2.active = name;
+  persistPane2();
+  renderAll2();
+}
+function closeTab2(name){
+  var idx = state2.open.indexOf(name);
+  if(idx !== -1) state2.open.splice(idx, 1);
+  if(state2.active === name){
+    state2.active = state2.open.length ? state2.open[Math.max(0, idx-1)] : null;
+  }
+  persistPane2();
+  renderAll2();
+}
+
+function onEditorInput2(){
+  if(!state2.active) return;
+  files[state2.active] = inputLayer2.value;
+  refreshHighlight2();
+  syncGutter2();
+  clearTimeout(saveDebounce);
+  saveDebounce = setTimeout(function(){ saveFiles(files); }, 400);
+}
+
+function refreshHighlight2(){
+  var lang = langOf(state2.active);
+  highlightCode2.innerHTML = highlight(inputLayer2.value + "\n", lang);
+}
+
+function syncGutter2(){
+  var lines = inputLayer2.value.split("\n").length;
+  var html = "";
+  for(var i=1;i<=lines;i++) html += i + "<br>";
+  gutter2.innerHTML = html;
+}
+
+function loadIntoEditor2(){
+  if(!state2.active){
+    emptyState2.style.display = "flex";
+    editorScroll2.style.display = "none";
+    curFileName2.textContent = "CodePad";
+    runBtn2.style.display = "none";
+    saveBtn2.disabled = true;
+    return;
+  }
+  emptyState2.style.display = "none";
+  editorScroll2.style.display = "flex";
+  saveBtn2.disabled = false;
+  curFileName2.textContent = displayPath(state2.active);
+  inputLayer2.value = files[state2.active] || "";
+  refreshHighlight2();
+  syncGutter2();
+  var lang = langOf(state2.active);
+  runBtn2.style.display = (lang === "html") ? "flex" : "none";
+}
+
+function renderAll2(){
+  renderFileList2();
+  renderTabs2();
+  loadIntoEditor2();
+}
+
 /* scroll sync between textarea and highlight layer / gutter */
 inputLayer.addEventListener("scroll", function(){
   $("highlightLayer").style.transform = "translate(" + (-inputLayer.scrollLeft) + "px," + (-inputLayer.scrollTop) + "px)";
   gutter.scrollTop = inputLayer.scrollTop;
 });
 inputLayer.addEventListener("input", onEditorInput);
+inputLayer2.addEventListener("scroll", function(){
+  $("highlightLayer2").style.transform = "translate(" + (-inputLayer2.scrollLeft) + "px," + (-inputLayer2.scrollTop) + "px)";
+  gutter2.scrollTop = inputLayer2.scrollTop;
+});
+inputLayer2.addEventListener("input", onEditorInput2);
 
 /* Tab key + auto-indent */
 inputLayer.addEventListener("keydown", function(e){
@@ -1321,6 +1806,32 @@ inputLayer.addEventListener("keydown", function(e){
     }
   }
 });
+inputLayer2.addEventListener("keydown", function(e){
+  if(e.key === "Tab"){
+    e.preventDefault();
+    var start = inputLayer2.selectionStart, end = inputLayer2.selectionEnd;
+    var val = inputLayer2.value;
+    inputLayer2.value = val.slice(0,start) + "  " + val.slice(end);
+    inputLayer2.selectionStart = inputLayer2.selectionEnd = start + 2;
+    onEditorInput2();
+  } else if(e.key === "Enter"){
+    var start2 = inputLayer2.selectionStart;
+    var val2 = inputLayer2.value;
+    var lineStart = val2.lastIndexOf("\n", start2-1) + 1;
+    var line = val2.slice(lineStart, start2);
+    var indentMatch = line.match(/^[ \t]*/);
+    var indent = indentMatch ? indentMatch[0] : "";
+    var extra = /[{:\[(]\s*$/.test(line) ? "  " : "";
+    if(indent || extra){
+      e.preventDefault();
+      var insert = "\n" + indent + extra;
+      inputLayer2.value = val2.slice(0,start2) + insert + val2.slice(inputLayer2.selectionEnd);
+      var pos = start2 + insert.length;
+      inputLayer2.selectionStart = inputLayer2.selectionEnd = pos;
+      onEditorInput2();
+    }
+  }
+});
 
 /* keep gutter width consistent + sizing on resize */
 window.addEventListener("resize", function(){ /* layout is flex-based, no-op */ });
@@ -1330,28 +1841,35 @@ var kbToolbar = $("kbToolbar");
 var kbRowNav = $("kbRowNav");
 var kbRowSym = $("kbRowSym");
 
+// The on-screen toolbar always edits whichever textarea (pane 1 or pane 2)
+// last had focus — see activeInputLayer, set by the focus listeners below.
+function onActiveInputChanged(){
+  if(activeInputLayer === inputLayer2) onEditorInput2(); else onEditorInput();
+}
 function insertAtCursor(str){
-  var ta = inputLayer;
+  var ta = activeInputLayer;
   var start = ta.selectionStart, end = ta.selectionEnd;
   var val = ta.value;
   ta.value = val.slice(0,start) + str + val.slice(end);
   ta.selectionStart = ta.selectionEnd = start + str.length;
-  onEditorInput();
+  onActiveInputChanged();
 }
 function getLineCol(text, pos){
   var lineStart = text.lastIndexOf("\n", pos-1) + 1;
   return { lineStart: lineStart, col: pos - lineStart };
 }
 function kbMoveLeft(){
-  var p = Math.max(0, inputLayer.selectionStart - 1);
-  inputLayer.selectionStart = inputLayer.selectionEnd = p;
+  var ta = activeInputLayer;
+  var p = Math.max(0, ta.selectionStart - 1);
+  ta.selectionStart = ta.selectionEnd = p;
 }
 function kbMoveRight(){
-  var p = Math.min(inputLayer.value.length, inputLayer.selectionEnd + 1);
-  inputLayer.selectionStart = inputLayer.selectionEnd = p;
+  var ta = activeInputLayer;
+  var p = Math.min(ta.value.length, ta.selectionEnd + 1);
+  ta.selectionStart = ta.selectionEnd = p;
 }
 function kbMoveUp(){
-  var ta = inputLayer, text = ta.value, pos = ta.selectionStart;
+  var ta = activeInputLayer, text = ta.value, pos = ta.selectionStart;
   var cur = getLineCol(text, pos);
   if(cur.lineStart === 0){ ta.selectionStart = ta.selectionEnd = 0; return; }
   var prevLineEnd = cur.lineStart - 1;
@@ -1361,7 +1879,7 @@ function kbMoveUp(){
   ta.selectionStart = ta.selectionEnd = newPos;
 }
 function kbMoveDown(){
-  var ta = inputLayer, text = ta.value, pos = ta.selectionEnd;
+  var ta = activeInputLayer, text = ta.value, pos = ta.selectionEnd;
   var cur = getLineCol(text, pos);
   var curLineEnd = text.indexOf("\n", pos);
   if(curLineEnd === -1){ ta.selectionStart = ta.selectionEnd = text.length; return; }
@@ -1390,7 +1908,7 @@ function buildKbRow(container, items){
     btn.textContent = isNav ? item.label : item;
     function activate(){
       if(isNav) item.action(); else insertAtCursor(item);
-      if(document.activeElement !== inputLayer) inputLayer.focus();
+      if(document.activeElement !== activeInputLayer) activeInputLayer.focus();
       ensureCaretVisible();
     }
     var firedByTouch = false;
@@ -1447,7 +1965,7 @@ function layoutForKeyboard(){
 // Scroll the textarea (and so the highlight layer + gutter) so the caret
 // line is inside the visible area.
 function ensureCaretVisible(){
-  var ta = inputLayer;
+  var ta = activeInputLayer;
   var line = ta.value.slice(0, ta.selectionEnd).split("\n").length - 1;
   var lineH = 24, pad = 12;
   var top = pad + line * lineH;
@@ -1468,12 +1986,26 @@ if(window.visualViewport){
   window.visualViewport.addEventListener("scroll", layoutForKeyboard);
 }
 inputLayer.addEventListener("focus", function(){
+  activeInputLayer = inputLayer;
   kbToolbar.classList.add("show");
   layoutForKeyboard();
 });
 inputLayer.addEventListener("blur", function(){
   setTimeout(function(){
-    if(document.activeElement !== inputLayer){
+    if(document.activeElement !== inputLayer && document.activeElement !== inputLayer2){
+      kbToolbar.classList.remove("show");
+      layoutForKeyboard();
+    }
+  }, 60);
+});
+inputLayer2.addEventListener("focus", function(){
+  activeInputLayer = inputLayer2;
+  kbToolbar.classList.add("show");
+  layoutForKeyboard();
+});
+inputLayer2.addEventListener("blur", function(){
+  setTimeout(function(){
+    if(document.activeElement !== inputLayer && document.activeElement !== inputLayer2){
       kbToolbar.classList.remove("show");
       layoutForKeyboard();
     }
@@ -1498,8 +2030,10 @@ function nextSerialNumber(){
 }
 
 var newFileParent = null; // when set, the new file is created *inside* this file
+var newFileTargetPane = 1; // which pane (1 = main screen, 2 = split panel) opens the new file
 
 newFileBtn.addEventListener("click", function(){
+  newFileTargetPane = 1;
   newFileParent = null;
   $("newFileTitle").textContent = "নতুন ফাইল তৈরি করুন";
   var next = nextSerialNumber();
@@ -1511,10 +2045,25 @@ newFileBtn.addEventListener("click", function(){
     newFileInput.setSelectionRange(pos, pos);
   }, 50);
 });
+newFileBtn2.addEventListener("click", function(){
+  newFileTargetPane = 2;
+  newFileParent = null;
+  $("newFileTitle").textContent = "নতুন ফাইল তৈরি করুন";
+  var next2 = nextSerialNumber();
+  newFileInput.value = next2 + " ";
+  showModal(newFileModal);
+  setTimeout(function(){
+    newFileInput.focus();
+    var pos2 = newFileInput.value.length;
+    newFileInput.setSelectionRange(pos2, pos2);
+  }, 50);
+});
 
-// "+ নতুন ফাইল" shown on a file's own row — creates a file *inside* it
+// "+ নতুন ফাইল" shown on a file's own row/tab — creates a file *inside* it
 // (e.g. "38 ...html" keeps its number; this adds "38 ...html/2.html" etc.)
-function openNewFileFor(parentName){
+// paneNum says which pane (1 or 2) triggered this, so the new file opens there.
+function openNewFileFor(parentName, paneNum){
+  newFileTargetPane = paneNum || 1;
   newFileParent = parentName;
   $("newFileTitle").textContent = '"' + baseName(parentName) + '" এর ভিতরে নতুন ফাইল';
   var ext = extOf(parentName);
@@ -1535,10 +2084,18 @@ function createNewFile(){
   var name = newFileParent ? (newFileParent + "/" + raw) : raw;
   if(files.hasOwnProperty(name)){ showToast("এই নামে ফাইল আগে থেকেই আছে"); return; }
   files[name] = "";
-  if(newFileParent) state.expanded[newFileParent] = true;
+  // Shown as expanded in both sidebars, since the file is now shared.
+  if(newFileParent){ state.expanded[newFileParent] = true; state2.expanded[newFileParent] = true; }
   hideModal(newFileModal);
-  openFile(name);
-  if(!isDesktop) closeSidebar();
+  if(newFileTargetPane === 2){
+    openFile2(name);
+    if(!isDesktop) closeSidebar2();
+    renderFileList(); renderTabs(); // keep the other pane's file list in sync
+  } else {
+    openFile(name);
+    if(!isDesktop) closeSidebar();
+    renderFileList2(); renderTabs2();
+  }
   showToast("ফাইল তৈরি হয়েছে");
   newFileParent = null;
 }
@@ -1546,6 +2103,8 @@ $("newFileCreate").addEventListener("click", createNewFile);
 newFileInput.addEventListener("keydown", function(e){ if(e.key === "Enter") createNewFile(); });
 
 /* ============ Rename modal ============ */
+// Shared between both panes — a file's name is the same everywhere, so
+// renaming it updates whichever pane(s) currently have it open.
 var renameTarget = null;
 function openRename(name){
   renameTarget = name;
@@ -1562,13 +2121,14 @@ $("renameConfirm").addEventListener("click", function(){
   if(newName !== renameTarget){
     files[newName] = files[renameTarget];
     delete files[renameTarget];
-    var idx = state.open.indexOf(renameTarget);
-    if(idx !== -1) state.open[idx] = newName;
-    if(state.active === renameTarget) state.active = newName;
+    renameInState(state, renameTarget, newName);
+    renameInState(state2, renameTarget, newName);
   }
   hideModal($("renameModal"));
   persist();
+  persistPane2();
   renderAll();
+  renderAll2();
   showToast("নাম পরিবর্তন হয়েছে");
 });
 
@@ -1584,12 +2144,13 @@ $("deleteModal").addEventListener("click", function(e){ if(e.target === $("delet
 $("deleteConfirm").addEventListener("click", function(){
   if(!deleteTarget) return;
   delete files[deleteTarget];
-  var idx = state.open.indexOf(deleteTarget);
-  if(idx !== -1) state.open.splice(idx,1);
-  if(state.active === deleteTarget) state.active = state.open.length ? state.open[0] : null;
+  pruneStateForFiles(state);
+  pruneStateForFiles(state2);
   hideModal($("deleteModal"));
   persist();
+  persistPane2();
   renderAll();
+  renderAll2();
   showToast("ফাইল ডিলিট হয়েছে");
   deleteTarget = null;
 });
@@ -1758,6 +2319,12 @@ saveBtn.addEventListener("click", function(){
   persist();
   showToast("সেভ হয়েছে");
 });
+saveBtn2.addEventListener("click", function(){
+  if(!state2.active) return;
+  files[state2.active] = inputLayer2.value;
+  persistPane2();
+  showToast("সেভ হয়েছে");
+});
 downloadBtn.addEventListener("click", function(){
   if(!state.active) return;
   var blob = new Blob([files[state.active]], {type:"text/plain"});
@@ -1836,13 +2403,92 @@ runBtn.addEventListener("click", function(){
   $("previewFrame").srcdoc = injectPreviewShim(raw);
   previewPanel.classList.add("show");
 });
+runBtn2.addEventListener("click", function(){
+  if(!state2.active) return;
+  var raw2 = buildPreviewContent(state2.active);
+  $("previewName").textContent = state2.active;
+  $("previewFrame").srcdoc = injectPreviewShim(raw2);
+  previewPanel.classList.add("show");
+});
 $("previewClose").addEventListener("click", function(){ previewPanel.classList.remove("show"); });
 
 /* ============ Theme sync (favicon-ish, no-op placeholder) ============ */
 
+/* ============ Split panel: second independent editor ============ */
+// A genuinely separate CodePad (own sidebar, tabs, editor, run/save) living
+// inside #splitPanel — built from the exact same DOM/CSS classes as the main
+// screen, running natively in this same page (no iframe), so typing, paste,
+// and the on-screen keyboard all work exactly like the main editor.
+var splitArrow = $("splitArrow");
+var splitPanel = $("splitPanel");
+var splitResizeHandle = $("splitResizeHandle");
+var SPLIT_WIDTH_KEY = "codepad_split_width_v1";
+var SPLIT_MIN = 220;
+var splitOpen = false;
+var splitWidth = (function(){
+  var saved = parseInt(localStorage.getItem(SPLIT_WIDTH_KEY), 10);
+  if(saved && saved > 0) return saved;
+  return Math.round(window.innerWidth * 0.6);
+})();
+
+function clampSplitWidth(w){
+  var max = window.innerWidth;
+  if(w < SPLIT_MIN) w = SPLIT_MIN;
+  if(w > max) w = max;
+  return w;
+}
+function applySplitWidth(){
+  splitWidth = clampSplitWidth(splitWidth);
+  splitPanel.style.width = splitWidth + "px";
+  if(splitOpen) splitArrow.style.right = splitWidth + "px";
+}
+function openSplit(){
+  splitOpen = true;
+  applySplitWidth();
+  splitPanel.classList.add("show");
+  splitArrow.textContent = "›";
+  splitArrow.title = "সাইড এডিটর বন্ধ করুন";
+}
+function closeSplit(){
+  splitOpen = false;
+  splitPanel.classList.remove("show");
+  splitArrow.style.right = "0";
+  splitArrow.textContent = "‹";
+  splitArrow.title = "পাশে আরেকটা স্বাধীন এডিটর খুলুন";
+}
+splitArrow.addEventListener("click", function(){
+  splitOpen ? closeSplit() : openSplit();
+});
+
+var resizing = false, resizeStartX = 0, resizeStartWidth = 0;
+splitResizeHandle.addEventListener("pointerdown", function(ev){
+  resizing = true;
+  resizeStartX = ev.clientX;
+  resizeStartWidth = splitWidth;
+  try{ splitResizeHandle.setPointerCapture(ev.pointerId); }catch(e){}
+  ev.preventDefault();
+});
+splitResizeHandle.addEventListener("pointermove", function(ev){
+  if(!resizing) return;
+  // The panel is anchored to the right edge, so dragging the handle left
+  // (clientX decreasing) should widen it.
+  splitWidth = resizeStartWidth + (resizeStartX - ev.clientX);
+  applySplitWidth();
+});
+function endResize(){
+  if(!resizing) return;
+  resizing = false;
+  try{ localStorage.setItem(SPLIT_WIDTH_KEY, String(Math.round(splitWidth))); }catch(e){}
+}
+splitResizeHandle.addEventListener("pointerup", endResize);
+splitResizeHandle.addEventListener("pointercancel", endResize);
+window.addEventListener("resize", function(){ if(splitOpen) applySplitWidth(); });
+
 /* ============ Init ============ */
 persist();
+persistPane2();
 renderAll();
+renderAll2();
 
 if("serviceWorker" in navigator){
   window.addEventListener("load", function(){
